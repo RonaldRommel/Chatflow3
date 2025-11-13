@@ -76,7 +76,7 @@ public class CircuitBreaker {
             System.out.println("⚠️ [CIRCUIT BREAKER] Back to OPEN state after failure in HALF_OPEN");
         } else if (currentFailures >= failureThreshold && state == State.CLOSED) {
             state = State.OPEN;
-            System.out.println("🔴 [CIRCUIT BREAKER] OPENED after " + currentFailures + " consecutive failures!");
+            System.out.println("[CIRCUIT BREAKER] OPENED after " + currentFailures + " consecutive failures!");
         }
     }
 

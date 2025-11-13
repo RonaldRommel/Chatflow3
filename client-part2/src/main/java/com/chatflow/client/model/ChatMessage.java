@@ -2,6 +2,7 @@ package com.chatflow.client.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 
 public class ChatMessage {
@@ -52,9 +53,34 @@ public class ChatMessage {
     public String getRoomId() { return roomId; }
     public void setRoomId(String roomId) { this.roomId = roomId; }
 
-    public MessageType getMessageType() { return messageType; }
+    public String getMessageType() { return messageType.toString(); }
     public void setMessageType(MessageType messageType) { this.messageType = messageType; }
 
     public Instant getTimestamp() { return timestamp; }
     public void setTimestamp(Instant timestamp) { this.timestamp = timestamp; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        ChatMessage that = (ChatMessage) o;
+        return Objects.equals(messageId, that.messageId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(messageId);
+    }
+
+    @Override
+    public String toString() {
+        return "ChatMessage{" +
+                "messageId='" + messageId + '\'' +
+                ", userId='" + userId + '\'' +
+                ", username='" + username + '\'' +
+                ", message='" + message + '\'' +
+                ", roomId='" + roomId + '\'' +
+                ", messageType=" + messageType +
+                ", timestamp=" + timestamp +
+                '}';
+    }
 }

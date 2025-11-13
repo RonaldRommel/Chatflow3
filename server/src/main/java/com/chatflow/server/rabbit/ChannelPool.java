@@ -11,15 +11,25 @@ public class ChannelPool {
     private final BlockingQueue<Channel> pool;
     private final Connection connection;
     private final int poolSize;
+    private final String host;
+    private final int port;
+    private final String username;
+    private final String password;
 
-    public ChannelPool(int poolSize) throws IOException, TimeoutException {
-        ConnectionFactory factory = new ConnectionFactory();
-        factory.setHost("localhost");
-        factory.setPort(5672);
-        factory.setUsername("guest");
-        factory.setPassword("guest");
+    public ChannelPool(int poolSize, String host, int port, String username, String password) throws IOException, TimeoutException {
 
         this.poolSize = poolSize;
+        this.host = host;
+        this.port = port;
+        this.username = username;
+        this.password = password;
+
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost(host);
+        factory.setPort(port);
+        factory.setUsername(username);
+        factory.setPassword(password);
+
         this.connection = factory.newConnection();
         this.pool = new ArrayBlockingQueue<>(poolSize);
 

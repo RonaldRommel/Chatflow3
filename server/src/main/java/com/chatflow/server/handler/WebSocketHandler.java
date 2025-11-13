@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.time.Instant;
 import java.util.*;
 
 @Component
@@ -18,40 +19,27 @@ public class WebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final Validator validator;
     private final RabbitMQSender rabbitMQSender;
-    private final RoomSessionManager roomSessionManager;
-
+    private final SessionManager sessionManager;
     public WebSocketHandler(ObjectMapper objectMapper, Validator validator,
-                            RabbitMQSender rabbitMQSender, RoomSessionManager roomSessionManager) {
+                            RabbitMQSender rabbitMQSender, SessionManager sessionManager) {
         this.objectMapper = objectMapper;
         this.validator = validator;
         this.rabbitMQSender = rabbitMQSender;
-        this.roomSessionManager = roomSessionManager;
+        this.sessionManager = sessionManager;
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {}
+    public void afterConnectionEstablished(WebSocketSession session) {
+        String path = session.getUri().getPath();
+        String roomId = path.substring(path.lastIndexOf('/') + 1);
+        System.out.println("New WebSocket connection for room: " + roomId);
+        sessionManager.addSession(roomId, session);
+    }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        if (!session.isOpen()) return;
-
         String payload = message.getPayload();
-
         try {
-            if (!roomSessionManager.hasSession(session)) {
-                UserInfo user = objectMapper.readValue(payload, UserInfo.class);
-                roomSessionManager.addUserSession(session, user);
-
-                if (user.getRoomId() != null) {
-                    roomSessionManager.addUserToRoom(session, user.getRoomId(), user);
-                }
-
-                Map<String, String> response = new HashMap<>();
-                response.put("status", "REGISTERED");
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
-                return;
-            }
-
             ChatMessage chatMessage = objectMapper.readValue(payload, ChatMessage.class);
 
             Set<ConstraintViolation<ChatMessage>> violations = validator.validate(chatMessage);
@@ -59,24 +47,35 @@ public class WebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
+            Map<String, Object> ackResponse = Map.of(
+                    "messageId", chatMessage.getMessageId(),
+                    "status", "RECEIVED",
+                    "timestamp", Instant.now().toString()
+            );
+            synchronized (session) {
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(ackResponse)));
+            }
+
             String json = objectMapper.writeValueAsString(chatMessage);
             rabbitMQSender.sendMessage(chatMessage.getRoomId(), json);
 
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            System.err.println("YOOOO"+e.getMessage());
+        }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        roomSessionManager.removeSession(session);
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        roomSessionManager.removeSession(session);
         try {
             if (session.isOpen()) {
                 session.close(CloseStatus.SERVER_ERROR);
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+        }
     }
 }

@@ -1,21 +1,46 @@
 package com.chatflow.client;
 
-import com.chatflow.client.model.ChatMessage;
+import com.chatflow.client.analyzer.ChartGenerator;
+import com.chatflow.client.analyzer.PerformanceAnalyzer;
+import com.chatflow.client.service.MessageGenerator;
+import com.chatflow.client.service.MetricsCollector;
+import com.chatflow.client.service.WebSocketClientService;
+import com.chatflow.client.worker.MessageSenderWorker;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.*;
 
 @SpringBootApplication
 public class ClientApplication implements CommandLineRunner {
 
-    private final ClientPool clientPool;
-    private final MessageGenerator messageGenerator;
+    @Autowired
+    private MessageGenerator messageGenerator;
 
-    public ClientApplication(ClientPool clientPool, MessageGenerator messageGenerator) {
-        this.clientPool = clientPool;
-        this.messageGenerator = messageGenerator;
-    }
+    @Autowired
+    private WebSocketClientService clientService;
+
+    @Autowired
+    private MetricsCollector metricsCollector;
+
+    @Autowired
+    private PerformanceAnalyzer analyzer;
+
+    @Autowired
+    private ChartGenerator chartGenerator;
+
+    @Autowired
+    private ExecutorService executorService;
+
+    @Value("${optimal.threads}")
+    private int optimalThreads; // e.g., 100-200 threads
+
+    @Value("${total.messages}")
+    private int totalMessages; // 500,000
 
     public static void main(String[] args) {
         SpringApplication.run(ClientApplication.class, args);
@@ -23,68 +48,105 @@ public class ClientApplication implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws Exception {
-        MetricsCollector metrics = new MetricsCollector();
-        BlockingQueue<ChatMessage> queue = new LinkedBlockingQueue<>();
+        System.out.println("Starting load test with " + totalMessages + " messages...");
+        System.out.println("Using " + optimalThreads + " worker threads");
 
-        System.out.println("ChatFlow Load Test");
-        System.out.println("=".repeat(60));
+        long startTime = System.currentTimeMillis();
+        for  (int i = 1; i <= 20; i++) {
+            clientService.getOrCreateConnection("room"+i);
+        }
+        // 1. Start message generator (runs in background)
+        messageGenerator.startGenerating(totalMessages);
 
-        metrics.startTimer();
-
-        Thread generator = new Thread(() -> {
-            System.out.println("Generating 500K messages");
-            messageGenerator.generateMessages(queue, 500_000);
-            System.out.println("Generation complete");
-        });
-        generator.start();
-
-        Thread.sleep(3000);
-
-        clientPool.startClients(queue, "ws://localhost:8080/chat", metrics);
-
-        generator.join();
-
-        System.out.println("Processing");
-        while (!queue.isEmpty()) {
-            System.out.printf("  Queue: %,d%n", queue.size());
-            Thread.sleep(3000);
+        // 2. Create worker threads - NO per-thread message count!
+        List<Future<?>> futures = new ArrayList<>();
+        System.out.println("Starting workers");
+        for (int i = 0; i < optimalThreads; i++) {
+            MessageSenderWorker worker = new MessageSenderWorker(
+                    messageGenerator.getMessageQueue(),
+                    clientService,
+                    metricsCollector
+            );
+            futures.add(executorService.submit(worker));
         }
 
-        System.out.println("Waiting for ACKs");
-        int lastCount = 0;
-        int stuckCount = 0;
+        System.out.println("✅ Submitted " + futures.size() + " workers to executor");
+        System.out.println("⏳ Waiting for workers to complete...");
+        System.out.println("Active threads: " + Thread.activeCount());
+        System.out.println();
 
-        while (metrics.getSuccessCount() < 500_000 && stuckCount < 30) {
-            Thread.sleep(2000);
-            int currentCount = metrics.getSuccessCount();
+        // 3. Monitor progress
+        int lastCompleted = 0;
+        int checkCount = 0;
+        while (true) {
+            Thread.sleep(2000); // Check every 2 seconds
 
-            System.out.printf("  ACKs: %,d / 500,000 (%.1f%%)%n",
-                    currentCount, (currentCount / 500_000.0) * 100);
-
-            if (currentCount == lastCount) {
-                stuckCount++;
-            } else {
-                stuckCount = 0;
+            int completed = 0;
+            for (Future<?> future : futures) {
+                if (future.isDone()) {
+                    completed++;
+                }
             }
-            lastCount = currentCount;
+
+            int sent = metricsCollector.getSuccessCount() + metricsCollector.getFailureCount();
+            int queueSize = messageGenerator.getMessageQueue().size();
+
+            System.out.println(String.format(
+                    "[%ds] Workers: %d/%d done | Messages: %d/%d sent | Queue: %d | Message generated %d",
+                    (checkCount * 2),
+                    completed,
+                    futures.size(),
+                    sent,
+                    totalMessages,
+                    queueSize,
+                    messageGenerator.getMessagesGenerated()
+            ));
+
+            if (completed == futures.size()) {
+                System.out.println("\n✅ All workers completed!");
+                break;
+            }
+
+            // Safety check - if no progress for 30 seconds, something is wrong
+//            if (completed == lastCompleted && checkCount > 15) {
+//                System.err.println("\n⚠️  WARNING: No progress detected for 30 seconds!");
+//                System.err.println("Debugging info:");
+//                System.err.println("  - Queue size: " + queueSize);
+//                System.err.println("  - Messages sent: " + sent);
+//                System.err.println("  - Active threads: " + Thread.activeCount());
+//                System.err.println("  - Pending responses: " + clientService.getPendingResponsesCount());
+//                System.err.println("\nCheck if server is running and responding!");
+//
+//                // Wait a bit more
+//                Thread.sleep(10000);
+//            }
+
+//            lastCompleted = completed;
+//            checkCount++;
         }
 
-        int finalCount = metrics.getSuccessCount();
-        if (finalCount >= 500_000) {
-            System.out.println("All messages received");
-        } else {
-            System.out.println("Received " + finalCount + " / 500,000");
-            System.out.println("Missing: " + (500_000 - finalCount));
+
+        // 3. Wait for all threads to complete
+        for (Future<?> future : futures) {
+            future.get(); // Blocks until thread finishes
         }
 
-        metrics.stopTimer();
-        clientPool.stopAll();
+        executorService.shutdown();
 
-        metrics.printDetailedSummary();
-        metrics.writeMetricsToCSV("metrics.csv");
-        ThroughputVisualizer.generateThroughputData(metrics.getMessageMetrics(), "throughput.csv");
+        long endTime = System.currentTimeMillis();
+        long totalTime = endTime - startTime;
 
-        System.out.println("\nComplete");
+        // 4. Generate reports
+        System.out.println("\n=== Load Test Complete ===");
+        System.out.println("Total connections created: " + clientService.getConnectionPoolSize());// gotta chnge
+        System.out.println("Reconnections: " + clientService.getReconnectionCount());
+
+        analyzer.analyzeAndPrint(metricsCollector.getAllMetrics(), totalTime);
+
+        // 5. Export data
+        metricsCollector.writeToCSV("results/metrics.csv");
+        chartGenerator.generateThroughputChart(metricsCollector.getAllMetrics());
+
         System.exit(0);
     }
 }

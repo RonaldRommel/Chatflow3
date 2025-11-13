@@ -1,6 +1,6 @@
 package com.chatflow.server.rabbit;
 
-import com.chatflow.server.handler.RoomSessionManager;
+import com.chatflow.server.handler.SessionManager;
 import com.rabbitmq.client.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.DependsOn;
@@ -10,7 +10,6 @@ import org.springframework.web.socket.*;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -23,14 +22,13 @@ public class RabbitMQConsumer {
     private static final int CONSUMERS_PER_ROOM = 2;
 
     private final ChannelPool channelPool;
-    private final RoomSessionManager roomSessionManager;
     private final ExecutorService consumerExecutor = Executors.newFixedThreadPool(ROOM_COUNT * CONSUMERS_PER_ROOM);
     private final AtomicInteger processed = new AtomicInteger(0);
+    private final SessionManager sessionManager;
 
-    public RabbitMQConsumer(@Qualifier("consumerPool") ChannelPool channelPool,
-                            RoomSessionManager roomSessionManager) throws Exception {
+    public RabbitMQConsumer(@Qualifier("consumerPool") ChannelPool channelPool, SessionManager sessionManager) throws Exception {
         this.channelPool = channelPool;
-        this.roomSessionManager = roomSessionManager;
+        this.sessionManager = sessionManager;
         startConsumers();
     }
 
@@ -54,7 +52,7 @@ public class RabbitMQConsumer {
                         channel.exchangeDeclare(exchangeName, BuiltinExchangeType.FANOUT, true);
                         channel.queueDeclare(queueName, true, false, false, null);
                         channel.queueBind(queueName, exchangeName, "");
-                        channel.basicQos(50);
+//                        channel.basicQos(100);
 
                         if (consumerIndex == 0) {
                             System.out.println(CONSUMERS_PER_ROOM + " consumers for " + roomId);
@@ -77,7 +75,7 @@ public class RabbitMQConsumer {
                                     }
 
                                 } catch (Exception e) {
-                                    System.err.println("Error: " + e.getMessage());
+                                    System.err.println("Error here: " + e.getMessage());
                                     try {
                                         getChannel().basicNack(envelope.getDeliveryTag(), false, false);
                                     } catch (IOException ioException) {}
@@ -87,7 +85,7 @@ public class RabbitMQConsumer {
 
                     } catch (Exception e) {
                         System.err.println("Failed consumer for " + roomId + ": " + e.getMessage());
-                        e.printStackTrace();
+//                        e.printStackTrace();
                     }
                 });
             }
@@ -96,15 +94,13 @@ public class RabbitMQConsumer {
         System.out.println("All consumers started");
     }
 
-    private void broadcast(String roomId, String message) {
-        Set<WebSocketSession> sessions = roomSessionManager.getSessionsInRoom(roomId);
-
-        for (WebSocketSession session : sessions) {
+    private void broadcast(String roomId, String message) throws IOException {
+        WebSocketSession session = sessionManager.getSession(roomId);
+        synchronized (session) {
             if (session.isOpen()) {
-                try {
-                    session.sendMessage(new TextMessage(message));
-                } catch (Exception e) {}
+                session.sendMessage(new TextMessage(message));
             }
         }
+
     }
 }
