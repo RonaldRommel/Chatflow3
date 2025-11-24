@@ -53,12 +53,12 @@ public class MessageSenderWorker implements Runnable {
                 pendingFutures.add(future);
 
                 // Optional: Limit concurrent requests per thread to avoid overwhelming
-//                if (pendingFutures.size() >= 100) {
-//                    // Wait for some to complete
-//                    CompletableFuture.allOf(pendingFutures.toArray(new CompletableFuture[0])).join();
-//                    pendingFutures.clear();
-//
-//                }
+                if (pendingFutures.size() >= 50) {
+                    // Wait for some to complete
+                    CompletableFuture.allOf(pendingFutures.toArray(new CompletableFuture[0])).join();
+                    pendingFutures.clear();
+
+                }
             }
 
             // Wait for all remaining futures to complete

@@ -2,6 +2,8 @@
 # Maven / Java
 # =========================
 target/
+!server/target/
+
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup

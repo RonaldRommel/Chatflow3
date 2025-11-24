@@ -106,23 +106,6 @@ public class ClientApplication implements CommandLineRunner {
                 System.out.println("\n✅ All workers completed!");
                 break;
             }
-
-            // Safety check - if no progress for 30 seconds, something is wrong
-//            if (completed == lastCompleted && checkCount > 15) {
-//                System.err.println("\n⚠️  WARNING: No progress detected for 30 seconds!");
-//                System.err.println("Debugging info:");
-//                System.err.println("  - Queue size: " + queueSize);
-//                System.err.println("  - Messages sent: " + sent);
-//                System.err.println("  - Active threads: " + Thread.activeCount());
-//                System.err.println("  - Pending responses: " + clientService.getPendingResponsesCount());
-//                System.err.println("\nCheck if server is running and responding!");
-//
-//                // Wait a bit more
-//                Thread.sleep(10000);
-//            }
-
-//            lastCompleted = completed;
-//            checkCount++;
         }
 
 
@@ -141,10 +124,13 @@ public class ClientApplication implements CommandLineRunner {
         System.out.println("Total connections created: " + clientService.getConnectionPoolSize());// gotta chnge
         System.out.println("Reconnections: " + clientService.getReconnectionCount());
 
-        analyzer.analyzeAndPrint(metricsCollector.getAllMetrics(), totalTime);
+        System.out.println("Waiting for metrics to finish writing...");
+        while (metricsCollector.getPendingWrites() > 0) {
+            System.out.println("Pending writes: " + metricsCollector.getPendingWrites());
+            Thread.sleep(1000);
+        }
 
-        // 5. Export data
-        metricsCollector.writeToCSV("results/metrics.csv");
+        analyzer.analyzeAndPrint(metricsCollector.getAllMetrics(), totalTime);
         chartGenerator.generateThroughputChart(metricsCollector.getAllMetrics());
 
         System.exit(0);
